@@ -99,6 +99,13 @@ void pgm_save(unsigned char* buf, int wrap, int xsize, int ysize, FILE* f) {
         fwrite(buf + i * wrap, 1, xsize, f);
 }
 
+void displayFrame(AVFrame* frame)
+{
+    // pass frame data to texture then copy texture to renderer and present renderer
+    application->updateTexture(frame->data[0], frame->linesize[0], frame->data[1], frame->linesize[1], frame->data[2], frame->linesize[2]);
+    application->render();
+}
+
 void decode(AVCodecContext* videoDecoderContext, AVFrame* frame, AVPacket* packet, FILE* file, uint32_t& frameCnt) {
     int ret;
 
@@ -116,6 +123,8 @@ void decode(AVCodecContext* videoDecoderContext, AVFrame* frame, AVPacket* packe
 
         printf("\rSucceed to decode frame %d\n", frameCnt++);
 
+        displayFrame(frame);
+
         // yuyv422
         //fwrite(frame->data[0], 1, frame->width * frame->height * 2, file);
         pgm_save(frame->data[0], frame->linesize[0], frame->width, frame->height, file);
@@ -129,20 +138,14 @@ void decode(AVCodecContext* videoDecoderContext, AVFrame* frame, AVPacket* packe
 
 }
 
-void recordStream(AVFormatContext* input_fmt_ctx, int video_stream_index, AVCodecContext* video_decoder_ctx) {
-
-    FILE* fp = fopen("out.yuv", "w");
-    if (!fp) {
-        av_log(NULL, AV_LOG_ERROR, "cannot open output file\n");
-        return;
-    }
-
+void recordStream(AVFormatContext* input_fmt_ctx, int video_stream_index, AVCodecContext* video_decoder_ctx, FILE *fp) {
+    
     AVPacket* pkt = av_packet_alloc();
     AVFrame* frame = av_frame_alloc();
 
     uint32_t frameCnt = 0;
     int ret;
-    for (int i = 0; i < 100; i++) {
+    while(application->running()) {
 
         ret = av_read_frame(input_fmt_ctx, pkt);
         if (ret < 0) {
@@ -156,6 +159,8 @@ void recordStream(AVFormatContext* input_fmt_ctx, int video_stream_index, AVCode
             av_frame_unref(frame);
         }
         av_packet_unref(pkt); // Release pkt buffer data
+
+        application->handleEvent();
     }
 
     // Flush decoder
@@ -164,14 +169,12 @@ void recordStream(AVFormatContext* input_fmt_ctx, int video_stream_index, AVCode
     av_packet_free(&pkt);
     av_frame_free(&frame);
 
-    fclose(fp);
-
 }
 
 #pragma endregion
 
 int main()
-{
+{   
     // Инициализировать служебные объекты
     AVFormatContext* inputFormatContext = getInputFormatContext();
     if (inputFormatContext == NULL) {
@@ -193,8 +196,22 @@ int main()
         return -1;
     }
 
-    // Основная часть программы
-    recordStream(inputFormatContext, videoStreamIndex, videoDecoderContext);
+    application = new Application();
+    application->init("Camera", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, videoDecoderContext->width, videoDecoderContext->height, false);
+
+
+    FILE* fp = fopen("out.yuv", "w");
+    if (!fp) {
+        av_log(NULL, AV_LOG_ERROR, "cannot open output file\n");
+        return -1;
+    }
+
+    while (application->running()) {
+        // Основная часть программы
+        recordStream(inputFormatContext, videoStreamIndex, videoDecoderContext, fp);
+    }
+
+    fclose(fp);
 
     // Освободить память перед завершением программы
     avcodec_free_context(&videoDecoderContext);
